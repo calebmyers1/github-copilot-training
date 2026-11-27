@@ -8,6 +8,7 @@ for extracurricular activities at Mergington High School.
 from fastapi import FastAPI, HTTPException
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import RedirectResponse
+from email_validator import EmailNotValidError, validate_email
 import os
 from pathlib import Path
 
@@ -78,6 +79,18 @@ activities = {
 }
 
 
+def normalize_school_email(email: str) -> str:
+    email = email.strip().lower()
+    try:
+        validate_email(email, check_deliverability=False)
+    except EmailNotValidError as exc:
+        raise HTTPException(status_code=422, detail="Invalid email address") from exc
+
+    if email.rsplit("@", 1)[-1] != "mergington.edu":
+        raise HTTPException(status_code=422, detail="Email must use the mergington.edu domain")
+    return email
+
+
 @app.get("/")
 def root():
     return RedirectResponse(url="/static/index.html")
@@ -97,10 +110,14 @@ def signup_for_activity(activity_name: str, email: str):
 
     # Get the specific activity
     activity = activities[activity_name]
+    email = normalize_school_email(email)
 
     # Validate student is not already signed up
-    if email in activity["participants"]:
+    if any(participant.strip().lower() == email for participant in activity["participants"]):
         raise HTTPException(status_code=400, detail="Student already signed up for this activity")
+
+    if len(activity["participants"]) >= activity["max_participants"]:
+        raise HTTPException(status_code=400, detail="Activity is full")
 
     # Add student
     activity["participants"].append(email)
@@ -114,8 +131,14 @@ def unregister_from_activity(activity_name: str, email: str):
         raise HTTPException(status_code=404, detail="Activity not found")
 
     activity = activities[activity_name]
-    if email not in activity["participants"]:
+    email = normalize_school_email(email)
+    participant = next(
+        (participant for participant in activity["participants"]
+         if participant.strip().lower() == email),
+        None,
+    )
+    if participant is None:
         raise HTTPException(status_code=404, detail="Student is not signed up for this activity")
 
-    activity["participants"].remove(email)
+    activity["participants"].remove(participant)
     return {"message": f"Unregistered {email} from {activity_name}"}
